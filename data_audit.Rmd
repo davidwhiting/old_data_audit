@@ -1,0 +1,389 @@
+---
+output: pdf_document
+---
+Automated Data Audit
+==========
+
+```{r, echo=FALSE, eval=TRUE, cache=FALSE}
+dataname <- "propdata.csv"
+pathname <- ""
+filename <- paste(pathname, dataname, sep="")
+target <- "X1.Retail" # dependent variable
+EVAL <- TRUE # allows for finer control while debugging
+maxDisplay <- 10 # maximum levels of categorical variable to display
+maxCramerV <- 20 # maximum levels of categorical variable for computing Cramer's V 
+                 # (excludes dates, etc.)
+cv.cutoff <- .7 # only display Cramer's V with value greater than cv.cutoff
+```
+```{r audit, cache=TRUE}
+raw <- read.csv(filename, header = TRUE) 
+```
+
+```{r packages, message=FALSE, cache=FALSE, echo=FALSE}
+#require(fBasics, quietly = TRUE)
+require(Hmisc,   quietly = TRUE)
+require(xtable,  quietly = TRUE)
+require(plotrix, quietly = TRUE)
+require(timeDate, quietly = TRUE)
+require(colorspace, quietly = TRUE)
+require(gplots, quietly = TRUE)
+```
+
+```{r functions, echo=FALSE, cache=TRUE}
+mosaic2 <- function(x="CIF_CD", y="CONVERTED_IND", data=raw, ordered=FALSE) {
+  ## Function to create a mosaic plot from a raw table
+  cmd <- paste("tmp <- with(data, table(",x, ", ", y, "))", sep="")
+  eval(parse(text=cmd))
+  if(ordered) {
+    o <- order(apply(tmp, 1, sum), decreasing=TRUE)
+    tmp <- tmp[o, ]
+  }
+  mosaicplot(tmp, main=x,
+             color=rainbow_hcl(3)[-1], cex=0.7, 
+             xlab=x, ylab=y)
+  invisible()
+}
+ns <- function(x) {
+  ## my numerical summary
+  require(timeDate, quietly = TRUE) # needed for skewness & kurtosis
+  ## note: the timeDate library will not reload if it is loaded
+  result <- c(length(x), 
+              length(unique(x)),
+              sum(is.na(x)), 
+              min(x, na.rm = TRUE),
+              as.numeric(quantile(x, prob = 0.25, na.rm = TRUE)),
+              median(x, na.rm = TRUE),
+              as.numeric(quantile(x, prob = 0.75, na.rm = TRUE)),
+              as.numeric(quantile(x, prob = 0.95, na.rm = TRUE)),
+              max(x, na.rm = TRUE),
+              sum(as.numeric(x), na.rm = TRUE),
+              mean(x, na.rm = TRUE),
+              sd(x, na.rm = TRUE),
+              skewness(x, na.rm = TRUE),
+              kurtosis(x, na.rm = TRUE))
+  names(result) <- c("nobs", "Unique", "NAs", 
+                     "Min", "P.25", "P.50", "P.75", "P.95", "Max",
+                     "Sum", "Mean", "Stdev", "Skewness", "Kurtosis")
+  names(result) <- c("nobs", "Unique", "NAs", 
+                     "Min", "Q1", "Median", "Q3", "P.95", "Max",
+                     "Sum", "Mean", "Stdev", "Skewness", "Kurtosis")
+  result
+}
+bphist <- function(x, lims = c(.5, .8, .8), cols = rep('lightblue', 2), 
+                   main = "", xlabel = "", ...) {
+  require(plotrix, quietly = TRUE)
+  ns2 <- ns(x)
+  labels <- paste(paste("Unique = ", trunc(ns2[2],0), sep=""),
+                  paste("Mean   = ", formatC(ns2[11], digits=3, format="f"), sep=""),
+                  paste("StDev  = ", formatC(ns2[12], digits=3, format="f"), sep=""),
+                  paste("Min    = ", formatC(ns2[4], digits=3, format="f"), sep=""),
+                  paste("Median = ", formatC(ns2[6], digits=3, format="f"), sep=""),
+                  paste("Max    = ", formatC(ns2[9], digits=3, format="f"), sep=""),
+                  sep="\n")
+  par(fig=c(0, lims[3], 0, lims[2]), new = FALSE)
+  #hist(x, xlab = xlabel, main="", col = cols[2], ...)
+  hist(x, xlab = xlabel, main="", col = cols[2])
+  par(fig=c(0, lims[3], lims[1], 1),new = TRUE)
+  boxplot(x, axes=FALSE, horizontal = TRUE, col = cols[1])
+  title(main)
+  par(fig=c(0, 1, 0, 1), new = TRUE)
+  cl <- corner.label(label=labels, x=1, y=1, xoff=0, yoff=0)
+  
+  return(invisible())
+}
+myHist <- function(v = "ADF.FA2.BI", data = raw) {
+  ## function to create a histogram for continuous data
+  cmd  <- paste("hist(data$", v, ", xlab='", v,
+                "', freq = TRUE, col = 'cyan', main='", v, "')", sep="")
+  eval(parse(text = cmd))
+  invisible()
+}
+myHist2 <- function(v = "ADF.FA2.BI", data = raw) {
+  ## function to create a histogram for continuous data
+  cmd  <- paste("bphist(data$", v, ", main='", v, "')", 
+                sep="")
+  eval(parse(text = cmd))
+  invisible()
+}
+myBar <- function(v = "AFFNTY_GRP", data = raw) {
+  ## function to create a histogram for continuous data
+  cmd  <- paste("barplot(table(data$", v, "), col = 'gray', main='", v, "')", sep="")
+  eval(parse(text = cmd))
+  invisible()
+}
+myBox2 <- function(v, y = "CONVERTED_IND", data = raw) {
+  if(v != y) {
+    cmd <- paste("boxplot(", v, " ~ ", y, 
+             ", horizontal = TRUE, varwidth = TRUE, main = '", v, 
+             "', col = 'lightblue', data=data)", sep="")
+    eval(parse(text = cmd))
+  }
+  invisible()
+}
+data_prep <- function(data=raw) {
+  a <- contents(raw)
+  w <- which(a$contents$Levels > 0)
+  level.list <- contents(raw[, w])
+  vars.num <- names(raw)[-w]
+  vars.cat <- names(raw)[w]
+  new.df <- data.frame(t(apply(raw[, -w], 2, ns)))
+  new.df <- new.df[, -c(1,8,10,13,14)]
+  #new.df.xt <- xtable(new.df, digits=c(1, 0, 0, 0, rep(3, 11)))
+  new.df.xt <- xtable(new.df, digits=c(1, 0, 0, rep(3, 7)))
+  results <- list(a=a, w=w, level.list=level.list, vars.num=vars.num, vars.cat=vars.cat, 
+                  new.df=new.df, new.df.xt=new.df.xt)
+  return(results)
+}
+CramerV <- function(x = raw$MKT_TIER, y = raw$MKT_TIER_FA2) {
+  result <- NA
+  tab <- table(x, y)
+  den <- min(dim(tab)) - 1
+  if(den > 0) {
+    X2 <- suppressWarnings(as.numeric(chisq.test(tab, correct=FALSE)$statistic))
+    result <- sqrt(X2/(sum(tab) * den))
+  }
+  return(result)
+}
+create.CV.list <- function(vc = vars.cat, cutoff = 0.7, data = raw) {
+  n <- length(vc)
+  results <- data.frame(var1=0, var2=0, CramerV=rep(NA, n*(n-1)/2))
+  k <- 1
+  for(i in 1:(n-1)) {
+    for(j in (i+1):n) {
+      u <- vc[i]
+      v <- vc[j]
+      cmd <- paste("CramerV(data$",u,", data$", v,")", sep="")
+      results$var1[k] <- i
+      results$var2[k] <- j
+      results$CramerV[k] <- eval(parse(text = cmd))
+      k <- k+1
+    }
+  }
+  results <- results[!is.na(results$CramerV), ]
+  results <- results[results$CramerV > cutoff, ]
+  results$CramerV <- round(results$CramerV, 4)
+  results$Var1 <- vc[results$var1]
+  results$Var2 <- vc[results$var2]
+  results$var1 <- results$var2 <- NULL
+  rownames(results) <- NULL
+  results <- results[, c(2:3, 1)]
+  return(results)
+}
+```
+```{r data_prep, cache=TRUE, echo=FALSE, dependson=c("audit","functions","sample_raw"), eval=EVAL}
+prep <- data_prep(raw)
+```
+
+## Numeric Data Audit
+```{r echo=FALSE, cache=TRUE, eval=EVAL}
+par(mfrow=c(1,1))
+for(i in 1:length(prep$vars.num)) {
+#for(i in 1:length(10)) {
+  myHist2(prep$vars.num[i])
+}
+par(mfrow=c(1,1))
+```
+
+## Categorical Data Audit
+```{r, echo=FALSE, cache=TRUE, eval=EVAL}
+par(mfrow=c(2,2))
+for(i in 1:length(prep$vars.cat)) {
+  myBar(prep$vars.cat[i])
+}
+```
+
+## Numeric with a Target Variable
+```{r numeric_target, cache=TRUE, dependson="data_prep", echo=FALSE, eval=EVAL}
+par(mfrow=c(2,2))
+for(i in 1:length(prep$vars.num)) {
+  myBox2(prep$vars.num[i], y = target)
+}
+```
+
+## Categorical with a Target Variable
+```{r cat_target, cache=TRUE, dependson="data_prep", echo=FALSE, eval=EVAL}
+par(mfrow=c(2,2))
+cat.Levels <- as.data.frame(prep$level.list$contents)$Levels
+wcat <- which(cat.Levels < maxDisplay)
+#for(i in 1:length(vars.cat)) {
+for(i in wcat) {
+  mosaic2(x = prep$vars.cat[i], y = target)
+}
+```
+
+# Appendix
+## Numeric Summary
+```{r exportHTML, results='asis', echo=FALSE, eval=EVAL}
+print(prep$new.df.xt, type="html")
+```
+
+## Categorical Summary
+### Cramer's V (Categorical Correlation)
+
+```{r cramerv, cache=TRUE, echo=FALSE, eval=EVAL}
+w <- which(cat.Levels < maxCramerV)
+cv.list <- create.CV.list(vc = prep$vars.cat[w], cutoff=cv.cutoff, data=raw)
+o <- with(cv.list, order(-CramerV, Var1, Var2))
+cv.list <- cv.list[o, ]
+rownames(cv.list) <- NULL
+cv.tab <- xtable(cv.list, include.rownames = FALSE)
+digits(cv.tab) <- 4
+```
+```{r exportHTML2, results='asis', echo=FALSE, eval=EVAL}
+print(cv.tab, type="html")
+```
+### Levels
+
+```{r exporthtml3, echo=FALSE, eval=EVAL, cache=FALSE}
+truncate.levels <- function(x, cutoff=20) {
+  result <- x
+  if(length(x)>cutoff) {
+    result <- c(x[1:(cutoff-1)],"...")
+  } 
+  return(result)
+}
+my.print.contents <- function (x, sort = c("none", "names", "labels", "NAs"), prlevels = TRUE, 
+    number = FALSE, ...) {
+    sort <- match.arg(sort)
+    d <- x$dim
+    maxnas <- x$maxnas
+    cat("\nData frame:", x$dfname, "\t", d[1], " observations and ", 
+        d[2], " variables    Maximum # NAs:", maxnas, "\n\n", 
+        sep = "")
+    cont <- x$contents
+    nam <- row.names(cont)
+    if (number) 
+        row.names(cont) <- paste(format(1:d[2]), row.names(cont))
+    switch(sort, names = {
+        cont <- cont[order(nam), , drop = FALSE]
+    }, labels = {
+        if (length(cont$Labels)) cont <- cont[order(cont$Labels, 
+            nam), , drop = FALSE]
+    }, NAs = {
+        if (maxnas > 0) cont <- cont[order(cont$NAs, nam), , 
+            drop = FALSE]
+    })
+    if (length(cont$Levels)) 
+        cont$Levels <- ifelse(cont$Levels == 0, "", format(cont$Levels))
+#    print(cont)
+    if (prlevels && length(L <- x$Levels)) {
+        cat("\n")
+        nam <- names(L)
+        w <- .Options$width - max(nchar(nam)) - 5
+        reusingLevels <- sapply(L, is.name)
+        fullLevels <- which(!reusingLevels)
+        namf <- lin <- n.LI <- names(L[fullLevels])
+        j <- 0
+        for (i in fullLevels) {
+            j <- j + 1
+            varsUsingSame <- NULL
+            if (sum(reusingLevels)) {
+                for (k in which(reusingLevels)) if (L[[k]] == 
+                  namf[j]) 
+                  varsUsingSame <- c(varsUsingSame, nam[k])
+                if (length(varsUsingSame)) 
+                  namf[j] <- paste(c(namf[j], varsUsingSame), 
+                    collapse = "\n")
+            }
+            n.LI[i] <- length(L[[i]])
+            LI <- truncate.levels(L[[i]], 30)
+            lin[j] <- paste(pasteFit(LI, width = w), collapse = "\n")
+        }
+#        z <- cbind(Variable = namf, levels = n.LI, labels = lin)
+        z <- cbind(Variable = namf, labels = lin)
+        print.char.matrix(z, col.txt.align = "left", col.name.align = "left", 
+            row.names = TRUE, col.names = TRUE)
+    }
+    longlab <- x$longLabels
+    if (length(longlab)) {
+        if (existsFunction("strwrap")) 
+            for (i in 1:length(longlab)) {
+                if (longlab[i] != "") 
+                  longlab[i] <- paste(strwrap(longlab[i], width = 0.85 * 
+                    .Options$width), collapse = "\n")
+            }
+        i <- longlab != ""
+        nam <- names(longlab)
+        z <- cbind(Variable = nam[i], `Long Label` = longlab[i])
+        print.char.matrix(z, col.names = TRUE, row.names = FALSE, 
+            cell.align = "left")
+    }
+    invisible()
+}
+my.print.contents(prep$level.list, prlevels=TRUE)
+```
+
+```{r echo=FALSE,eval=FALSE}
+my.print.contents <- function (x, sort = c("none", "names", "labels", "NAs"), prlevels = TRUE, 
+    number = FALSE, ...) {
+    sort <- match.arg(sort)
+    d <- x$dim
+    maxnas <- x$maxnas
+    cat("\nData frame:", x$dfname, "\t", d[1], " observations and ", 
+        d[2], " variables    Maximum # NAs:", maxnas, "\n\n", 
+        sep = "")
+    cont <- x$contents
+    nam <- row.names(cont)
+    if (number) 
+        row.names(cont) <- paste(format(1:d[2]), row.names(cont))
+    switch(sort, names = {
+        cont <- cont[order(nam), , drop = FALSE]
+    }, labels = {
+        if (length(cont$Labels)) cont <- cont[order(cont$Labels, 
+            nam), , drop = FALSE]
+    }, NAs = {
+        if (maxnas > 0) cont <- cont[order(cont$NAs, nam), , 
+            drop = FALSE]
+    })
+    if (length(cont$Levels)) 
+        cont$Levels <- ifelse(cont$Levels == 0, "", format(cont$Levels))
+#    print(cont)
+    if (prlevels && length(L <- x$Levels)) {
+        cat("\n")
+        nam <- names(L)
+        w <- .Options$width - max(nchar(nam)) - 5
+        reusingLevels <- sapply(L, is.name)
+        fullLevels <- which(!reusingLevels)
+        namf <- lin <- n.LI <- names(L[fullLevels])
+        j <- 0
+        for (i in fullLevels) {
+            j <- j + 1
+            varsUsingSame <- NULL
+            if (sum(reusingLevels)) {
+                for (k in which(reusingLevels)) if (L[[k]] == 
+                  namf[j]) 
+                  varsUsingSame <- c(varsUsingSame, nam[k])
+                if (length(varsUsingSame)) 
+                  namf[j] <- paste(c(namf[j], varsUsingSame), 
+                    collapse = "\n")
+            }
+            n.LI[i] <- length(L[[i]])
+            LI <- truncate.levels(L[[i]], 30)
+            lin[j] <- paste(pasteFit(LI, width = w), collapse = "\n")
+        }
+        z <- cbind(Variable = namf, levels = n.LI, labels = lin)
+#        z <- cbind(Variable = namf, labels = lin)
+        print.char.matrix(z, col.txt.align = "left", col.name.align = "left", 
+            row.names = TRUE, col.names = TRUE)
+    }
+    longlab <- x$longLabels
+    if (length(longlab)) {
+        if (existsFunction("strwrap")) 
+            for (i in 1:length(longlab)) {
+                if (longlab[i] != "") 
+                  longlab[i] <- paste(strwrap(longlab[i], width = 0.85 * 
+                    .Options$width), collapse = "\n")
+            }
+        i <- longlab != ""
+        nam <- names(longlab)
+        z <- cbind(Variable = nam[i], `Long Label` = longlab[i])
+        print.char.matrix(z, col.names = TRUE, row.names = FALSE, 
+            cell.align = "left")
+    }
+    invisible()
+}
+#my.print.contents(prep$level.list, prlevels=TRUE)
+
+```
+
+
